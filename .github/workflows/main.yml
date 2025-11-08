@@ -1,3 +1,4 @@
+ 
 name: RDP
 on:
   workflow_dispatch:
@@ -8,199 +9,76 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Enable RDP and configure security settings
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          
-          # Configure firewall for both IPv4 and IPv6
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale-IPv4" dir=in action=allow protocol=TCP localport=3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale-IPv6" dir=in action=allow protocol=TCP localport=3389
-          
-          # Enable IPv6 support
-          Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | ForEach-Object {
-              netsh interface ipv6 set interface $_.InterfaceIndex advertise=enabled
-          }
-          
-          # Optimize RDP performance
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxInstanceCount" -Value 4294967295 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "TSUserEnabled" -Value 1 -Force
-          
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
-          Write-Host "✅ RDP configuration completed with IPv4/IPv6 support"
 
-      - name: Create RDP User with Enhanced Security
+      - name: Create RDP User with Static Password
         run: |
-          $username = "SIFODZ"
           $password = "sssddd333"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          # Remove existing user if any and create new user
-          Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
-          
-          # Add to required groups
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-          Add-LocalGroupMember -Group "Users" -Member $username
-          
-          # Configure user permissions
-          net user $username /logonpasswordchg:no
-          net user $username /active:yes
-          
-          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          if (-not (Get-LocalUser -Name "SIFOINFO" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "SIFOINFO" -Password $securePass -AccountNeverExpires
+          }
 
-          # Verify user creation
-          if (-not (Get-LocalUser -Name $username)) {
-              Write-Error "❌ User creation failed"
+          Add-LocalGroupMember -Group "Administrators" -Member "SIFOINFO"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "SIFOINFO"
+
+          echo "RDP_CREDS=User: SIFOINFO | Password: $password" >> $env:GITHUB_ENV
+
+          if (-not (Get-LocalUser -Name "SIFOINFO")) {
+              Write-Error "User creation failed"
               exit 1
           }
-          Write-Host "✅ User '$username' created successfully"
 
-      - name: Install Latest Tailscale
+      - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
 
-          try {
-              Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-              Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-              Remove-Item $installerPath -Force
-              Write-Host "✅ Tailscale installed successfully"
-          } catch {
-              Write-Error "❌ Tailscale installation failed: $($_.Exception.Message)"
-              exit 1
-          }
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-      - name: Establish Dual-Stack Tailscale Connection
+      - name: Establish Tailscale Connection
         run: |
-          # Connect to Tailscale with IPv4 and IPv6 support
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID --accept-routes --accept-dns --advertise-exit-node
-          
-          # Get both IPv4 and IPv6 addresses
-          $tsIP4 = $null
-          $tsIP6 = $null
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
           $retries = 0
-          
-          while (($null -eq $tsIP4 -or $null -eq $tsIP6) -and $retries -lt 15) {
-              if ($null -eq $tsIP4) {
-                  $tsIP4 = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              }
-              if ($null -eq $tsIP6) {
-                  $tsIP6 = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -6
-              }
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
               Start-Sleep -Seconds 5
               $retries++
           }
-          
-          if ($null -eq $tsIP4 -and $null -eq $tsIP6) {
-              Write-Error "❌ Tailscale IP addresses not assigned. Exiting."
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
-          
-          echo "TAILSCALE_IP4=$tsIP4" >> $env:GITHUB_ENV
-          echo "TAILSCALE_IP6=$tsIP6" >> $env:GITHUB_ENV
-          Write-Host "✅ Tailscale connected - IPv4: $tsIP4, IPv6: $tsIP6"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify Dual-Stack RDP Accessibility
+      - name: Verify RDP Accessibility
         run: |
-          Write-Host "🔍 Testing RDP connectivity..."
-          
-          $ipv4Success = $false
-          $ipv6Success = $false
-          
-          # Test IPv4 connectivity
-          if ($env:TAILSCALE_IP4) {
-              Write-Host "Testing IPv4: $env:TAILSCALE_IP4"
-              $testResult4 = Test-NetConnection -ComputerName $env:TAILSCALE_IP4 -Port 3389 -WarningAction SilentlyContinue
-              if ($testResult4.TcpTestSucceeded) {
-                  $ipv4Success = $true
-                  Write-Host "✅ IPv4 RDP connectivity successful!"
-              } else {
-                  Write-Host "⚠️ IPv4 RDP connectivity test failed"
-              }
-          }
-          
-          # Test IPv6 connectivity
-          if ($env:TAILSCALE_IP6) {
-              Write-Host "Testing IPv6: $env:TAILSCALE_IP6"
-              try {
-                  $testResult6 = Test-NetConnection -ComputerName $env:TAILSCALE_IP6 -Port 3389 -WarningAction SilentlyContinue
-                  if ($testResult6.TcpTestSucceeded) {
-                      $ipv6Success = $true
-                      Write-Host "✅ IPv6 RDP connectivity successful!"
-                  } else {
-                      Write-Host "⚠️ IPv6 RDP connectivity test failed"
-                  }
-              } catch {
-                  Write-Host "ℹ️ IPv6 test skipped (may not be supported in this environment)"
-              }
-          }
-          
-          if (-not $ipv4Success -and -not $ipv6Success) {
-              Write-Error "❌ No RDP connectivity established via IPv4 or IPv6"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
               exit 1
           }
+          Write-Host "TCP connectivity successful!"
 
-      - name: Optimize System Performance
+      - name: Maintain Connection
         run: |
-          # Disable unnecessary services for better performance
-          $servicesToDisable = @(
-              "XboxGipSvc",
-              "XboxNetApiSvc",
-              "WSearch",
-              "TabletInputService"
-          )
-          
-          foreach ($service in $servicesToDisable) {
-              Get-Service -Name $service -ErrorAction SilentlyContinue | Set-Service -StartupType Disabled -ErrorAction SilentlyContinue
-          }
-          
-          # Optimize network settings
-          netsh int tcp set global autotuninglevel=normal
-          netsh int tcp set global rss=enabled
-          
-          Write-Host "✅ System performance optimized"
-
-      - name: Maintain Enhanced Connection
-        run: |
-          $startTime = Get-Date
-          Write-Host "`n🎯 ==================== RDP ACCESS ===================="
-          Write-Host "📍 IPv4 Address: $env:TAILSCALE_IP4"
-          Write-Host "📍 IPv6 Address: $env:TAILSCALE_IP6"
-          Write-Host "👤 Username: SIFODZ"
-          Write-Host "🔑 Password: sssddd333"
-          Write-Host "⏰ Duration: 7 DAYS (168 Hours)"
-          Write-Host "🔧 Features: Dual-Stack (IPv4/IPv6) | Optimized Performance"
-          Write-Host "💡 Tip: Use either IPv4 or IPv6 address to connect"
-          Write-Host "=================================================`n"
-          
-          # Display connection status periodically
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: SIFOINFO"
+          Write-Host "Password: sssddd333"
+          Write-Host "Duration: 7 DAYS"
+          Write-Host "==================`n"
           while ($true) {
-              $currentTime = Get-Date
-              $elapsed = $currentTime - $startTime
-              $days = $elapsed.Days
-              $hours = $elapsed.Hours
-              $minutes = $elapsed.Minutes
-              
-              Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active - Elapsed: $days days, $hours hours, $minutes minutes - Session will auto-terminate in 7 days"
-              
-              # Verify services are still running every 10 minutes
-              if ($minutes % 10 -eq 0) {
-                  $rdpService = Get-Service -Name TermService -ErrorAction SilentlyContinue
-                  $tailscaleService = Get-Service -Name Tailscale -ErrorAction SilentlyContinue
-                  
-                  if ($rdpService.Status -ne 'Running') {
-                      Write-Host "🔄 Restarting RDP Service..."
-                      Start-Service -Name TermService
-                  }
-                  
-                  if ($tailscaleService.Status -ne 'Running') {
-                      Write-Host "🔄 Restarting Tailscale Service..."
-                      Start-Service -Name Tailscale
-                  }
-              }
-              
-              Start-Sleep -Seconds 300  # 5 minutes
+              Write-Host "[$(Get-Date)] RDP Active - 7 Days Session - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
           }
