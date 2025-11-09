@@ -1,11 +1,10 @@
- 
 name: RDP
 on:
   workflow_dispatch:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 10080
+    timeout-minutes: 3600
     steps:
       - name: Configure Core RDP Settings
         run: |
@@ -18,19 +17,19 @@ jobs:
 
       - name: Create RDP User with Static Password
         run: |
-          $password = "sssddd333"
+          $password = "admin@123"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          if (-not (Get-LocalUser -Name "SIFOINFO" -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name "SIFOINFO" -Password $securePass -AccountNeverExpires
+          if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
           }
 
-          Add-LocalGroupMember -Group "Administrators" -Member "SIFOINFO"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "SIFOINFO"
+          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
 
-          echo "RDP_CREDS=User: SIFOINFO | Password: $password" >> $env:GITHUB_ENV
+          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
 
-          if (-not (Get-LocalUser -Name "SIFOINFO")) {
+          if (-not (Get-LocalUser -Name "TOOLBOXLAP")) {
               Write-Error "User creation failed"
               exit 1
           }
@@ -74,11 +73,10 @@ jobs:
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: SIFOINFO"
-          Write-Host "Password: sssddd333"
-          Write-Host "Duration: 7 DAYS"
+          Write-Host "Username: TOOLBOXLAP"
+          Write-Host "Password: admin@123"
           Write-Host "==================`n"
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - 7 Days Session - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
